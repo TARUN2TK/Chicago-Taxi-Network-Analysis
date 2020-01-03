@@ -1,0 +1,473 @@
+---
+  title: Social Media and Network Analysis
+  author: Tarun Kateja
+  date: 24 November 2019
+  output:
+    html_document:
+    toc: true
+---
+  
+```{r, message=FALSE}
+rm(list = ls(all.names = T))
+```
+
+
+Loading required libraries.
+```{r, message=FALSE}
+library(dplyr)
+library(tidyr) 
+library(RJSONIO)
+library(jsonlite)
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+library(gridExtra)
+library(igraph)
+```
+
+# 1) Data Downloading and Loading Environment
+Downloading and loading the df in R environment programatically.
+```{r, message=FALSE}
+
+library(RSocrata)
+
+socrataEmail <- Sys.getenv("SOCRATA_EMAIL", "tkatej2@uic.edu")
+socrataPassword <- Sys.getenv("SOCRATA_PASSWORD", "IDS564@social")
+
+t <- paste0("https://data.cityofchicago.org/resource/m6dm-c72p.json?", "$where=trip_start_timestamp between '2018-11-19T00:00:00' and '2018-11-23T23:59:59'")
+
+data <- read.socrata(t, app_token = "2tpLO8cGxOzleg5cs3rChvJSz", email = socrataEmail, password = socrataPassword, stringsAsFactors = FALSE)
+
+data$pickup_centroid_location.coordinates <- as.character(data$pickup_centroid_location.coordinates)
+data$dropoff_centroid_location.coordinates <- as.character(data$dropoff_centroid_location.coordinates)
+
+write.csv(data, "C:/A_Work/UIC/Courses/Social Media and Network Analysis/Project/raw.csv", row.names = F)
+# data1 <- read.socrata(s, app_token = "2tpLO8cGxOzleg5cs3rChvJSz", email = socrataEmail, password = socrataPassword, stringsAsFactors = FALSE)
+
+data <- read.csv("C:/A_Work/UIC/Courses/Social Media and Network Analysis/Project/raw.csv", header = T, sep = ",")
+
+
+```
+
+
+```{r}
+
+# Subseting data
+select <- c("pickup_centroid_location.coordinates", "dropoff_centroid_location.coordinates",
+            "pickup_centroid_latitude", "pickup_centroid_longitude", 'pickup_community_area', 'dropoff_community_area',
+            'trip_miles', 'trip_seconds', 'fare', 'tip', 'trip_total',"trip_start_timestamp")
+
+df <- data[,select[5:6]]
+df[ df == "NULL" ] <- NA
+
+df <- na.omit(df, cols=seq_along(c('pickup_community_area', 'dropoff_community_area')))
+# 1042783
+
+g_net <- graph.data.frame(df, directed = T)
+E(g_net)$weight <- 1
+
+vcount(g_net)
+ecount(g_net)
+
+g_simple <- simplify(g_net, edge.attr.comb="sum")
+
+rescale = function(x,a,b,c,d){c + (x-a)/(b-a)*(d-c)}
+
+plot(g_simple, edge.width = rescale(E(g_simple)$weight, 1,28779, 0.001, 10 ) , vertex.size = rescale(degree(g_simple, mode = "out"), 36, 76, 0.001, 5), main = "Chicago Taxi Network - Simplified", vertex.label = NA, edge.arrow.size=F)
+```
+
+```{r}
+# Subgraph with more than 500 trips (main graph on which analysis is based)
+g_sub <- subgraph.edges(g_simple, E(g_simple)[E(g_simple)$weight>500], del=F)
+g_sub1 <- delete_vertices(g_sub, degree(g_sub, mode = "in")==0)
+
+plot(g_sub1, edge.width = rescale(E(g_sub1)$weight, 509, 28779, 0.001, 10 ) , vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.1, 10), main = "Chicago Taxi Network - More than 500 Rides", vertex.label = NA, edge.arrow.size=F)
+```
+
+```{r}
+rescale = function(x,a,b,c,d){c + (x-a)/(b-a)*(d-c)}
+
+l <- layout.fruchterman.reingold(g_sub1, niter=500, area=vcount(g_sub1)^4*10)
+
+l1 <- layout.kamada.kawai(g_sub1)
+
+l2 <- layout.davidson.harel(g_sub1)
+
+l3 <-  layout.reingold.tilford(g_sub1)
+l4 <- layout.auto(g_sub1)
+
+# Degree Distribution
+deg_d_gsim <- degree.distribution(g_simple, cumulative = T)
+plot(deg_d_gsim, log = 'xy', bg = 'black', xlab = 'Degree', ylab = 'Cumulative Frequency', main = "Degree Distribution")
+
+deg_d_gsub <- degree.distribution(g_sub1, cumulative = T)
+plot(deg_d_gsub, log = 'xy', bg = 'black', xlab = 'Degree', ylab = 'Cumulative Frequency', main = "Degree Distribution for more than 500 trips")
+
+clusters(g_sub1, mode = 'strong')$no
+# 2
+
+# Histo
+hist(degree(g_simple, mode = "out"), col="blue", xlab="Degree", ylab="Frequency", main="Degree Distribution: TNP network")
+hist(degree(g_sub1, mode = "out"), col="blue", xlab="Degree", ylab="Frequency", main="Degree Distribution: TNP network with more than 500 trips")
+
+
+# Coordinate for more than 500 trips
+V(g_sub1)$name
+
+df7 <- data[,c("pickup_community_area", "dropoff_community_area", "pickup_centroid_latitude", "pickup_centroid_longitude")]
+df7 <- as.data.frame(lapply(df7, function(x) as.numeric(as.character(x))))
+df7 <- na.omit(df7)
+df7 <- df7[as.character(df7$pickup_community_area) %in% V(g_sub1)$name,]
+
+df8 <- df7 %>% group_by(pickup_community_area) %>% summarise(lat = mean(pickup_centroid_latitude), long = mean(pickup_centroid_longitude))
+
+
+cord_df <- as.matrix(df8[,c("long", "lat")])
+
+
+rescale = function(x,a,b,c,d){c + (x-a)/(b-a)*(d-c)}
+
+# degree(g_simple1, mode = "Out")
+# 
+# rescale(degree(g_simple1, mode = "out"), 37, 77, 1, 10)
+# E(g_simple1)$weight <-  rescale(E(g_simple1)$weight, 1, 28779, 1, 10)
+
+# plot(g_simple, layout = cord_df, vertex.size = rescale(degree(g_simple, mode = "out"), 0, 649, 0.1, 10), edge.arrow.size=F, rescale = TRUE, main = "Induced Subgraph", vertex.label = NA)
+# 
+# plot(g_sub1, layout = cord_df, vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.1, 20), edge.arrow.size=F, main = "Induced Subgraph", vertex.label = NA, axes = TRUE,  ylim=c(-88, -87), xlim=c(41, 43), asp = 0, vertex.label.cex = 0.8)
+
+name_v <- c('1'='Rogers Park', '2'='West Ridge', '3'='Uptown', '4'='Lincoln Square', '5'='North Center', '6'='Lakeview', '7'='Lincoln Park', '8'='Near North Side', '9'='Edison Park', '10'='Norwood Park', '11'='Jefferson Park', '12'='Forest Glen', '13'='North Park', '14'='Albany Park', '15'='Portage Park', '16'='Irving Park', '17'='Dunning', '18'='Montclare', '19'='Belmont Cragin', '20'='Hermosa', '21'='Avondale', '22'='Logan Square', '23'='Humboldt Park', '24'='West Town', '25'='Austin', '26'='West Garfield Park', '27'='East Garfield Park', '28'='Near West Side', '29'='North Lawndale', '30'='South Lawndale', '31'='Lower West Side', '32'='Loop', '33'='Near South Side', '34'='Armour Square', '35'='Douglas', '36'='Oakland', '37'='Fuller Park', '38'='Grand Boulevard', '39'='Kenwood', '40'='Washington Park', '41'='Hyde Park', '42'='Woodlawn', '43'='South Shore', '44'='Chatham', '45'='Avalon Park', '46'='South Chicago', '47'='Burnside', '48'='Calumet Heights', '49'='Roseland', '50'='Pullman', '51'='South Deering', '52'='East Side', '53'='West Pullman', '54'='Riverdale', '55'='Hegewisch', '56'='Garfield Ridge', '57'='Archer Heights', '58'='Brighton Park', '59'='McKinley Park', '60'='Bridgeport', '61'='New City', '62'='West Elsdon', '63'='Gage Park', '64'='Clearing', '65'='West Lawn', '66'='Chicago Lawn', '67'='West Englewood', '68'='Englewood', '69'='Greater Grand Crossing', '70'='Ashburn', '71'='Auburn Gresham', '72'='Beverly', '73'='Washington Heights', '74'='Mount Greenwood', '75'='Morgan Park', '76'='O-Hare', '77'='Edgewater' )
+
+V(g_sub1)$label <- name_v[V(g_sub1)$name]
+
+plot(g_sub1, layout = cord_df, vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.0001, 3), edge.arrow.size=F, axes = TRUE,  xlim=c(-87.92, -87.55), ylim=c(41.7, 42.05), asp = 0, vertex.label.cex = 0.9, rescale = F,
+     edge.width= rescale(E(g_sub1)$weight, 509,28779, 0.001, 10 ), xlab = "Longitude", ylab = "Latitude")
+
+```
+
+```{r}
+components(g_sub1, mode = c("strong"))
+
+graph <- clusters(g_sub1, mode = c("strong"))
+
+plot(g_sub1, mark.groups = split(1:vcount(g_sub1), graph$membership))
+
+plot(g_sub1, mark.groups = split(1:vcount(g_sub1), graph$membership), layout = cord_df, vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.0001, 3), edge.arrow.size=F, axes = TRUE,  xlim=c(-87.92, -87.55), ylim=c(41.7, 42.05), asp = 0, vertex.label.cex = 0.9, rescale = F, edge.width= rescale(E(g_sub1)$weight, 509,28779, 0.001, 10 ), xlab = "Longitude", ylab = "Latitude")
+
+count_components(g_sub1, mode = "strong")
+
+count_components(g_sub1, mode = "weak")
+
+
+#label propogation
+label_1<-cluster_label_prop(g_sub1, weights = E(g_sub1)$weight, fixed = NULL, initial = NULL)
+
+plot(label_1, g_sub1, layout = cord_df, vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.0001, 3), edge.arrow.size=F, axes = TRUE,  xlim=c(-87.92, -87.55), ylim=c(41.7, 42.05), asp = 0, vertex.label.cex = 0.9, rescale = F, edge.width= rescale(E(g_sub1)$weight, 509,28779, 0.001, 10 ), xlab = "Longitude", ylab = "Latitude")
+
+edge_g <- cluster_edge_betweenness(g_sub1, weights = E(g_sub1)$weight, directed = TRUE, edge.betweenness = TRUE)
+
+plot(edge_g, g_sub1, layout = cord_df, vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.0001, 3), edge.arrow.size=F, axes = TRUE,  xlim=c(-87.92, -87.55), ylim=c(41.7, 42.05), asp = 0, vertex.label.cex = 0.9, rescale = F, edge.width= rescale(E(g_sub1)$weight, 509,28779, 0.001, 10 ), xlab = "Longitude", ylab = "Latitude")
+
+
+# use edge_g$names and edge_g$membership for knowing which major nodes in which community
+```
+
+
+
+No. of trips on each day
+```{r}
+
+df2 <- na.omit(data[, c('pickup_community_area', 'dropoff_community_area', "trip_start_timestamp")] ,
+                        cols=seq_along(c('pickup_community_area', 'dropoff_community_area')))
+
+df2$wday <- as.POSIXlt(df2$trip_start_timestamp)$wday
+
+df3 <- df2 %>% group_by(wday) %>% tally()
+
+ggplot(data=df3, aes(x=wday, y=n, group=1)) + geom_line()+ geom_point()+ labs(title = "No. of trips on each day (Monday (1) to Friday(5))")
+                          
+
+```
+
+
+
+Degree Distribution
+
+```{r}
+hist(degree(g_net, mode = "out"), col="blue", xlab="Degree", ylab="Frequency", main="Degree Distribution: Complete TNP network")
+
+hist(degree(g_sub1, mode = "out"), col="blue", xlab="Degree", ylab="Frequency", main="Degree Distribution: TNP network with more than 50 rides")
+
+```
+
+Busiest Hours
+```{r}
+
+df4 <- na.omit(data[, c('pickup_community_area', 'dropoff_community_area', "trip_start_timestamp")] ,
+                        cols=seq_along(c('pickup_community_area', 'dropoff_community_area')))
+df4$wday <- as.POSIXlt(df4$trip_start_timestamp)$wday
+df4$Hour <- format(as.POSIXlt(strptime(df4[,'trip_start_timestamp'],format = '%Y-%m-%d %H:%M:%S')), "%H")
+
+df5 <- df4 %>% group_by(wday, Hour) %>% tally()
+
+
+table(df4[,c("wday", "Hour")]) %>%
+  as.data.frame() %>%
+  ggplot() +
+  aes(x=wday, y=Hour, fill=Freq) + 
+  geom_tile() +  labs(title = "Heatmap of number of trips for hour of the Weekday")
+  
+```
+
+
+```{r}
+
+df6 <- na.omit(data[, c('trip_total', 'trip_seconds')] ,
+                        cols=seq_along(c('trip_total', 'trip_seconds')))
+df6 <- as.data.frame(lapply(df6, function(x) as.numeric(as.character(x))))
+
+ggplot(df6, aes(trip_total, trip_seconds, color = trip_total)) +
+  geom_point(shape = 16, size = 3, show.legend = FALSE, alpha = .4) + coord_cartesian(xlim = c(0,400), ylim = c(0, 20000)) +
+  labs(title = "Cost vs Duration")
+  
+```
+
+
+
+
+Random or Preferential attachment study 
+
+```{r}
+# Checking degree distribution
+deg_d_g_sub1 <- degree.distribution(g_sub1, cumulative = T, mode = "Out")
+plot(deg_d_g_sub1, log = 'xy', bg = 'black', xlab = 'Degree', ylab = 'Cumulative Frequency', main = "Degree Distribution Sub Network with more than 500 rides")
+```
+
+Looking at above plot it might be hybrid network with both preferential and random network!
+
+
+```{r}
+# Checking nearest neighbor node distribution
+a.nn.deg.g_sub1 <- graph.knn(g_sub1,V(g_sub1))$knn
+
+plot(degree(g_sub1), a.nn.deg.g_sub1, log="xy", 
+     col="goldenrod", xlab=c("Log Vertex Degree"),
+     ylab=c("Log Average Neighbor Degree"), main="Neighbor Network Node Degree Distribution")
+
+```
+
+This network is not preferential network (Scale free)
+
+```{r}
+lcc <- g_sub1
+# Letc check out some centrality measures
+deg_lcc <- degree(lcc)
+
+bet_lcc <- betweenness(lcc)
+
+clo_lcc <- closeness(lcc)
+
+tra_lcc <- transitivity(lcc, type = "local")
+
+eig_lcc <- evcent(lcc)
+
+
+data_pt = data.frame(degree = deg_lcc, closeness = clo_lcc, betweenness = bet_lcc)
+plot(data_pt)
+```
+
+```{r}
+plot(eig_lcc$vector, bet_lcc, main = "Betweenness vs Eigen Vector Centrality Plot", ylab = "Betweenness", xlab = "Eigen Vector Centralities")
+text(eig_lcc$vector, bet_lcc, cex = 0.6, pos = 4)
+```
+
+```{r}
+lccp <- lcc
+
+V(lccp)$labels = NA
+# V(g)$labels[which(degree(g) > 15)] = which(degree(g) > 15)
+V(lccp)[22]$labels = 22
+V(lccp)[21]$labels = 21
+E(lccp)$color = "grey"
+V(lccp)$shape = "circle"
+# V(lccp)[22]$shape = 'square' 
+# V(lccp)[21]hape = 'rectangle'
+
+
+plot(lccp, layout = cord_df, vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.0001, 3), vertex.label = V(lccp)$labels, vertex.shape = V(lccp)$shape, vertex.size = 3, edge.arrow.size=F, xlim=c(-87.92, -87.55), ylim=c(41.7, 42.05),
+     asp = 0, vertex.label.cex = 0.9, rescale = F, edge.width= rescale(E(g_sub1)$weight, 509,28779, 0.001, 10 ), xlab = "Longitude", ylab = "Latitude", axes = TRUE)
+```
+
+```{r}
+# shortest path between loop and 22
+pa = get.shortest.paths(lccp, "21", "22")[[1]]
+
+pa = unlist(pa)
+E(lccp)$color = "grey"
+E(lccp, path = pa)$color = "red"
+E(lccp, path = pa)$width = 5
+plot(lccp, layout = cord_df, vertex.size = rescale(degree(g_sub1, mode = "out"), 1, 25, 0.0001, 3), vertex.label = V(lccp)$labels, vertex.shape = V(lccp)$shape, vertex.size = 3, edge.arrow.size=F, xlim=c(-87.92, -87.55), ylim=c(41.7, 42.05),
+     asp = 0, vertex.label.cex = 0.9, rescale = F, edge.width= rescale(E(g_sub1)$weight, 509,28779, 0.001, 10 ), xlab = "Longitude", ylab = "Latitude", axes = TRUE)
+
+```
+
+
+```{r}
+
+dd = degree.distribution(lcc, mode = "all", cumulative = FALSE)
+
+# Plot degree distribution
+
+# function to plot the degree distribution
+plot_degree_distribution = function(graph) {
+  # calculate degree
+  d = degree(graph, mode = "all")
+  dd = degree.distribution(graph, mode = "all", cumulative = FALSE)
+  degree = 1:max(d)
+  probability = dd[-1]
+  # delete blank values
+  nonzero.position = which(probability != 0)
+  probability = probability[nonzero.position]
+  degree = degree[nonzero.position]
+  # plot
+  plot(probability ~ degree, log = "xy", xlab = "Degree (log)", ylab = "Probability (log)", 
+       col = "goldenrod", pch = 16, main = "Log-Log Degree Distribution")
+}
+
+
+plot_degree_distribution(lcc)
+```
+
+Not following linear trend with log log plot and hence its not preferential attachment
+
+
+```{r}
+# plot and fit the power law distribution
+fit_power_law = function(graph) {
+  # calculate degree
+  d = degree(graph, mode = "all")
+  dd = degree.distribution(graph, mode = "all", cumulative = FALSE)
+  degree = 1:max(d)
+  probability = dd[-1]
+  # delete blank values
+  nonzero.position = which(probability != 0)
+  probability = probability[nonzero.position]
+  degree = degree[nonzero.position]
+  reg = lm(log(probability) ~ log(degree))
+  cozf = coef(reg)
+  power.law.fit = function(x) exp(cozf[[1]] + cozf[[2]] * log(x))
+  alpha = -cozf[[2]]
+  R.square = summary(reg)$r.squared
+  print(paste("Alpha =", round(alpha, 3)))
+  print(paste("R square =", round(R.square, 3)))
+  # plot
+  plot(probability ~ degree, log = "xy", xlab = "Degree (log)", ylab = "Probability (log)", 
+       col = 1, main = "Degree Distribution")
+  curve(power.law.fit, col = "red", add = T, n = length(d))
+}
+
+
+fit_power_law(lcc)
+
+
+```
+
+
+
+
+```{r}
+
+# Lets calculate alphas'
+F_d <- ecdf(degree(lcc))
+degree_lc <- degree(lcc)
+tab_degree <- data.frame(table(degree_lc))
+
+
+csum <- cumsum(tab_degree$Freq)
+F_d <- csum/sum(tab_degree$Freq)
+
+# Cumulative degree frequency plot
+plot(F_d)
+
+avg.degree.lcc <- mean(degree(lcc))
+# 2.342
+
+
+alpha_0 <- 0.11
+
+m.mac <- 0.5*avg.degree.lcc
+
+y <- log(1 - F_d)
+#onmit Inf
+y[23] <- NA
+d <- as.numeric(levels(tab_degree$degree_lc))
+x_1 <- (2*alpha_0*m.mac)/(1-alpha_0)
+x_1.2 <- d + x_1
+x <- log(x_1.2)
+
+model.mac<-lm(na.omit(y)~x[1:22])
+model.mac$coefficients
+# (Intercept)     x[1:22] 
+#    2.278480   -1.289036 
+```
+
+```{r}
+alpha_0<-0.1
+x_1<-(2*alpha_0*m.mac)/(1-alpha_0)
+x_1.2<-d+x_1
+x<-log(x_1.2)
+model.mac2<-lm(na.omit(y)~x[1:22])
+beta<-model.mac2$coefficients[2]
+alpha_1<-1+2/beta
+alpha_1  #-0.5779757 for alpha1
+```
+
+
+```{r}
+
+library(rlist)
+alpha_0<-seq(0,0.9,0.1)
+alpha_0<-list.append(alpha_0,c(0.99,0.999)) 
+# calculate x values for each alpha_0  and plot the x lists
+xset<-list()
+par(mfrow=c(2,6))
+for (i in 1:12){
+  x_1<-(2*alpha_0[i]*m.mac)/(1-alpha_0[i])
+  x_1.2<-d+x_1
+  x<-log(x_1.2)
+  boxplot(x)
+  xset<-list.append(xset,x)
+}
+
+
+#now calulate beta value and alpha_1
+
+#remove any inf in x 
+x_1<-xset[1]
+x_1[[1]][1]<-NA
+xset[1]<-x_1
+
+alpha1_list<-list()
+
+for(i in 1:12){
+  model.mac<-lm(y~as.matrix(xset[[i]]))
+  beta<-model.mac$coefficients[2]
+  alpha_1<- 1+(2/beta)
+  alpha1_list<-list.append(alpha1_list,alpha_1)
+  
+}
+
+dev.off()
+
+a<-as.data.frame(alpha1_list)
+
+plot(unlist(a)~alpha_0,xlab='alpha_0',ylab='alpha_1 estimated') + abline(a= 0, b = 1)
+
+
+
+```
+
+
+Looking at above plot, its a random network as alpha_0 = alpha_1 (estimated alpha)
+
+The more curvey, the more chances of preferential attachment and hence this is more like linear between alpha_0 and alpha_1 and hence it is surely random attachment network.
